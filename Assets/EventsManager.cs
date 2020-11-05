@@ -4,15 +4,20 @@ using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using Newtonsoft.Json;
-using Analytics;
 using UnityEngine.Networking;
 using EventType = Analytics.EventType;
 
 public class EventsManager : MonoBehaviour
 {
+    #region InspectorFields
+    [SerializeField] private string serverURL  = "url";
+    [SerializeField] private float cooldownBeforeSend  = 1f;
+    #endregion
     #region Propierties
     public static EventsManager Instance { get; private set; }
-    public Data Data { get; private set; }
+    private Data Data;
+    private float currentCooldownTime;
+    private List<Event> sendingsEvents = new List<Event>();
 
     #endregion
     #region UnityMethods
@@ -31,29 +36,16 @@ public class EventsManager : MonoBehaviour
         LoadData();
     }
 
-    private void Update()
+    private void Start()
     {
-        if (Input.GetKeyUp(KeyCode.A))
+        if (Data.events.Count > 0)
         {
-           TrackEvent(EventType.LEVEL_START, new object[] {1});
-        }
-        if (Input.GetKeyUp(KeyCode.S))
-        {
-            TrackEvent(EventType.LEVEL_WIN, new object[] {1});
-        }
-        if (Input.GetKeyUp(KeyCode.D))
-        {
-            TrackEvent(EventType.LEVEL_LOSE, new object[] {1});
-        }
-        if (Input.GetKeyUp(KeyCode.F))
-        {
-            TrackEvent(EventType.INGAME_PURCHASE, new object[] {"bo", 500});
+            TryToSendEvents();
         }
     }
-    
     #endregion
+    
     #region PublicMethods
-
     public static void TrackEvent(EventType type, object[] data = null)
     {
         var key = type.ToString().ToLower();
@@ -90,13 +82,41 @@ public class EventsManager : MonoBehaviour
         }
         Instance.SendEvent(new Event(key, parameters));
     }
-
+    
+    #endregion
+    
+    #region PrivateMethods
     private void SendEvent(Event value)
     {
         Data.events.Add(value);
-        Save();
+        SaveData(Data);
+        TryToSendEvents();
     }
-    public IEnumerator CallLogin(string url, string data)
+
+    private void TryToSendEvents()
+    {
+        if (currentCooldownTime <= 0)
+        {
+            currentCooldownTime = cooldownBeforeSend;
+            StartCoroutine(WaitToSend());
+        }
+    }
+
+    private IEnumerator WaitToSend()
+    {
+        while (currentCooldownTime > 0)
+        {
+            currentCooldownTime -= Time.deltaTime;
+            yield return null;
+        }
+        
+        var data = JsonConvert.SerializeObject(Data);
+        sendingsEvents.Clear();
+        sendingsEvents.AddRange(Data.events);
+        Data.events.Clear();
+        StartCoroutine(SendEvent(serverURL, data));
+    }
+    private IEnumerator SendEvent(string url, string data)
     {
         var request = new UnityWebRequest (url, "POST");
         byte[] bodyRaw = Encoding.UTF8.GetBytes(data);
@@ -104,30 +124,27 @@ public class EventsManager : MonoBehaviour
         request.downloadHandler =  new DownloadHandlerBuffer();
         request.SetRequestHeader("Content-Type", "application/json");
         yield return request.SendWebRequest();
-
+        
         if (request.error != null)
         {
             Debug.Log("Error: " + request.error);
+            Data.events.InsertRange(0, sendingsEvents);
+            sendingsEvents.Clear();
+            SaveData(Data);
+            TryToSendEvents();
         }
         else
         {
             Debug.Log("All OK");
             Debug.Log("Status Code: " + request.responseCode);
+            sendingsEvents.Clear();
         }
-
     }
-
-    public void Save()
-    {
-        SaveData(Data);
-    }
-    #endregion
     
-    #region PrivateMethods
+
     private void SaveData(object obj)
     {
         var str = JsonConvert.SerializeObject(obj);
-        Debug.Log(str);
         PlayerPrefs.SetString("savingdata", str);
     }
     
@@ -143,12 +160,16 @@ public class EventsManager : MonoBehaviour
         {
             Data = JsonConvert.DeserializeObject<Data>(str);
         }
-        Save();
+        SaveData(Data);
     }
 
     private void OnApplicationQuit()
     {
-        Save();
+        if (sendingsEvents.Count > 0)
+        {
+            Data.events.InsertRange(0, sendingsEvents);
+        }
+        SaveData(Data);
     }
     #endregion
 
@@ -170,7 +191,3 @@ public class Event
     public string type;
     public Dictionary<string, object> data;
 }
-
-
-
-
